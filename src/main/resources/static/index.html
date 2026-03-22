@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Blind Chat</title>
+
+    <style>
+        :root {
+            --bg: #ffffff;
+            --text: #000000;
+            --box: #f5f5f5;
+            --msg-you: #2979ff;
+            --msg-stranger: rgba(85, 85, 85, 0.9);
+        }
+
+        body.dark {
+            --bg: #0b0b0f;
+            --text: #ffffff;
+            --box: #111;
+            --msg-you: #2979ff;
+            --msg-stranger: #555;
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* HEADER */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 20px;
+            width: 100%;
+            box-sizing: border-box;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .left-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .logo {
+            width: 45px;
+        }
+
+        .title-group h2 {
+            margin: 0;
+        }
+
+        .tagline {
+            margin: 0;
+            color: gray;
+            font-size: 13px;
+        }
+
+        .right-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        button {
+            padding: 8px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            border: none;
+            font-weight: bold;
+        }
+
+        #startBtn { background-color: #00c853; color: white; }
+        #sendBtn { background-color: #2979ff; color: white; }
+        #nextBtn { background-color: orange; color: black; }
+
+        #toggleTheme {
+            background: #555;
+            color: white;
+        }
+
+        /* MESSAGES */
+        #messages {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+            background: var(--box);
+        }
+
+        #typingIndicator {
+            font-style: italic;
+            color: gray;
+            padding-left: 10px;
+        }
+
+        /* INPUT */
+        .input-area {
+            display: flex;
+            gap: 5px;
+            padding: 10px;
+            background: var(--bg);
+        }
+
+        input {
+            padding: 10px;
+            border-radius: 8px;
+            border: none;
+            outline: none;
+            flex: 1;
+        }
+        @media (max-width: 768px) {
+
+    .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+
+    .right-header {
+        flex-wrap: wrap;
+        width: 100%;
+        gap: 8px;
+    }
+
+    .right-header button {
+        flex: 1;
+        padding: 10px;
+        font-size: 14px;
+    }
+
+    .logo {
+        width: 40px;
+    }
+
+    .title-group h2 {
+        font-size: 18px;
+    }
+
+    .tagline {
+        font-size: 12px;
+    }
+}
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+</head>
+
+<body>
+
+<!-- HEADER -->
+<div class="header">
+
+    <!-- LEFT -->
+    <div class="left-header">
+        <img src="images/logo.png" class="logo">
+
+        <div class="title-group">
+            <h2>Blind Chat</h2>
+            <p class="tagline">Connect • Chat • Anonymously</p>
+        </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div class="right-header">
+        <button id="toggleTheme">🌙 Dark Mode</button>
+        <button id="startBtn">Start</button>
+        <button id="nextBtn" disabled>Next Stranger</button>
+        <span>Status: <b id="status">Disconnected</b></span>
+    </div>
+
+</div>
+
+<!-- CHAT -->
+<div id="messages"></div>
+
+<div id="typingIndicator" style="display:none;">
+    Stranger is typing...
+</div>
+
+<!-- INPUT -->
+<div class="input-area">
+    <input type="text" id="msgInput" placeholder="Type message"/>
+    <button id="sendBtn" disabled>Send</button>
+</div>
+
+<script>
+    let stompClient = null;
+    let clientId = null;
+    let partnerConnected = false;
+    let isConnected = false;
+    let isTyping = false;
+    let typingTimeout = null;
+
+    const statusEl = document.getElementById("status");
+    const messagesEl = document.getElementById("messages");
+    const nextBtn = document.getElementById("nextBtn");
+    const sendBtn = document.getElementById("sendBtn");
+    const msgInput = document.getElementById("msgInput");
+    const startBtn = document.getElementById("startBtn");
+    const typingIndicator = document.getElementById("typingIndicator");
+
+    function append(sender, msg) {
+        const timestamp = new Date().toLocaleTimeString();
+
+        let bg = sender === "You"
+            ? getComputedStyle(document.body).getPropertyValue('--msg-you')
+            : getComputedStyle(document.body).getPropertyValue('--msg-stranger');
+
+        messagesEl.innerHTML += `
+            <div style="margin: 5px 0;">
+                <div style="
+                    display:inline-block;
+                    padding:8px 12px;
+                    border-radius:10px;
+                    background:${bg};
+                    color:white;
+                    max-width:70%;
+                ">
+                    <small style="color:#ccc;">${timestamp}</small><br/>
+                    <b>${sender}:</b> ${msg}
+                </div>
+            </div>
+        `;
+
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+
+    function generateClientId() {
+        return 'client-' + Math.random().toString(36).substr(2, 9);
+    }
+
+    function updateButtonStates() {
+        sendBtn.disabled = !partnerConnected;
+        msgInput.disabled = !partnerConnected;
+        nextBtn.disabled = !partnerConnected;
+    }
+
+    function disconnect() {
+        if (stompClient && stompClient.connected) {
+            stompClient.disconnect();
+            stompClient = null;
+        }
+        isConnected = false;
+        partnerConnected = false;
+        messagesEl.innerHTML = "";
+        statusEl.innerText = "Disconnected";
+        startBtn.innerText = "Start";
+        startBtn.style.backgroundColor = "#00c853";
+        typingIndicator.style.display = "none";
+        updateButtonStates();
+    }
+
+    startBtn.onclick = () => {
+        if (isConnected) {
+            disconnect();
+            return;
+        }
+
+        clientId = generateClientId();
+        const socket = new SockJS("/chat");
+        stompClient = Stomp.over(socket);
+
+        stompClient.connect({}, () => {
+            isConnected = true;
+            startBtn.innerText = "Disconnect";
+            startBtn.style.backgroundColor = "red";
+            statusEl.innerText = "Waiting...";
+
+            stompClient.subscribe("/topic/match/" + clientId, (msg) => {
+                if (msg.body === "null") {
+                    append("System", "⏳ Waiting for a stranger...");
+                    partnerConnected = false;
+                    statusEl.innerText = "Waiting...";
+                } else {
+                    append("System", "✅ Connected!");
+                    partnerConnected = true;
+                    statusEl.innerText = "Connected";
+                }
+                updateButtonStates();
+            });
+
+            stompClient.subscribe("/topic/messages/" + clientId, (msg) => {
+                append("Stranger", msg.body);
+
+                if (msg.body === "Stranger has disconnected") {
+                    partnerConnected = false;
+                    isConnected = false;
+                    startBtn.innerText = "Start";
+                    statusEl.innerText = "Disconnected";
+                    typingIndicator.style.display = "none";
+                    updateButtonStates();
+                }
+            });
+
+            stompClient.subscribe("/topic/typing/" + clientId, (msg) => {
+                typingIndicator.style.display = msg.body === "start" ? "block" : "none";
+            });
+
+            stompClient.send("/app/match", {}, clientId);
+        });
+    };
+
+    msgInput.oninput = () => {
+        if (!partnerConnected) return;
+
+        if (!isTyping) {
+            stompClient.send("/app/typing", {}, "start");
+            isTyping = true;
+        }
+
+        clearTimeout(typingTimeout);
+        typingTimeout = setTimeout(() => {
+            stompClient.send("/app/typing", {}, "stop");
+            isTyping = false;
+        }, 2000);
+    };
+
+    sendBtn.onclick = () => {
+        const msg = msgInput.value.trim();
+        if (!msg || !partnerConnected) return;
+
+        stompClient.send("/app/send", {}, msg);
+        append("You", msg);
+        msgInput.value = "";
+    };
+
+    msgInput.addEventListener("keypress", function(e) {
+        if (e.key === "Enter") sendBtn.click();
+    });
+
+    nextBtn.onclick = () => {
+        messagesEl.innerHTML = "";
+        partnerConnected = false;
+        append("System", "🔄 Finding new stranger...");
+        statusEl.innerText = "Finding...";
+
+        stompClient.send("/app/next", {}, clientId);
+        setTimeout(() => {
+            stompClient.send("/app/match", {}, clientId);
+        }, 100);
+
+        updateButtonStates();
+    };
+
+    // THEME
+    const toggleBtn = document.getElementById("toggleTheme");
+
+    if (localStorage.getItem("theme") === "dark") {
+        document.body.classList.add("dark");
+        toggleBtn.innerText = "☀️ Light Mode";
+    }
+
+    toggleBtn.onclick = () => {
+        document.body.classList.toggle("dark");
+
+        if (document.body.classList.contains("dark")) {
+            localStorage.setItem("theme", "dark");
+            toggleBtn.innerText = "☀️ Light Mode";
+        } else {
+            localStorage.setItem("theme", "light");
+            toggleBtn.innerText = "🌙 Dark Mode";
+        }
+    };
+
+    updateButtonStates();
+</script>
+
+</body>
+</html>
